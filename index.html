@@ -67,6 +67,11 @@
   .res .g{color:var(--muted);display:block;margin-top:2px}
   .center{text-align:center;color:var(--muted)}
   .hidden{display:none}
+  .lib{margin-top:22px;font-size:13px;color:var(--muted)}
+  .lib a{color:var(--muted);text-decoration:underline;cursor:pointer}
+  .lib .row{display:flex;gap:8px;margin-top:10px}
+  .lib input{flex:1;padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;font:inherit;text-transform:uppercase}
+  .lib button{padding:10px 16px;border:0;border-radius:10px;background:var(--navy);color:#fff;font:600 14px Poppins,sans-serif;cursor:pointer}
   footer{text-align:center;color:var(--muted);font-size:13px;padding-bottom:30px}
 </style>
 </head>
@@ -117,6 +122,7 @@
       <div class="hint" id="r-acertos"></div>
       <div class="pills"><span class="pill" id="r-rep"></span><span class="pill" id="r-neo"></span></div>
       <div class="saved">✓ Nota registrada para o professor</div>
+      <div class="lib hidden" id="r-lib"></div>
     </div>
     <div class="card" id="r-lista"></div>
   </section>
@@ -124,6 +130,13 @@
   <section id="tela-fechado" class="card center hidden">
     <h2>Quiz encerrado</h2>
     <p>O prazo para responder este quiz terminou. Em caso de dúvida, procure o professor.</p>
+  </section>
+
+  <section id="tela-bloqueado" class="card center hidden">
+    <h2>Acesso encerrado</h2>
+    <p id="b-msg">Você já realizou este quiz neste aparelho.</p>
+    <div class="big" id="b-nota" style="font:800 48px/1 Poppins,sans-serif;color:var(--navy);margin:14px 0 4px"></div>
+    <div class="lib hidden" id="b-lib"></div>
   </section>
 </main>
 <footer>UNINASSAU · Semiologia Veterinária · M.V. Pós-Grad. Marcelo Gabriel</footer>
@@ -134,7 +147,7 @@
   var LETRAS = ['A','B','C','D','E'];
   var $ = function(id){ return document.getElementById(id); };
   function show(id){
-    ['carregando','tela-id','tela-quiz','tela-res','tela-fechado'].forEach(function(s){ $(s).classList.toggle('hidden', s !== id); });
+    ['carregando','tela-id','tela-quiz','tela-res','tela-fechado','tela-bloqueado'].forEach(function(s){ $(s).classList.toggle('hidden', s !== id); });
     window.scrollTo(0,0);
   }
   function esc(s){ var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
@@ -182,6 +195,13 @@
       if (motivoSaida || idx >= q.questoes.length){ $('q-nome').textContent = aluno.nome; $('q-turma').textContent = aluno.turma; show('tela-quiz'); return enviar(); }
       return abrirQuiz();
     }
+    var feito = lerFeito();
+    if (feito){
+      $('b-nota').textContent = feito.nota != null ? fmt(feito.nota) + ' / ' + fmt(feito.max) : '';
+      $('b-msg').textContent = feito.saiu ? 'Você saiu da página durante o quiz e a tentativa foi encerrada. Suas respostas até aquele momento foram registradas.' : 'Você já realizou este quiz neste aparelho. Sua resposta foi registrada.';
+      montarLiberacao('b-lib', feito.tentativas || 1);
+      return show('tela-bloqueado');
+    }
     show('tela-id');
   }).catch(function(e){ $('carregando').textContent = 'Não foi possível carregar o quiz: ' + e; });
 
@@ -191,13 +211,42 @@
     if (nome.split(' ').length < 2 || nome.length < 5) return $('err-id').textContent = 'Digite seu nome completo (nome e sobrenome).';
     if (!t) return $('err-id').textContent = 'Selecione sua turma: Matutino ou Noturno.';
     $('err-id').textContent = '';
-    aluno = { nome: nome, turma: t.value, envioId: Date.now().toString(36) + Math.random().toString(36).slice(2) };
+    aluno = { nome: nome, turma: t.value, tentativa: tentativaAtual(), codigo: codigoLib, envioId: Date.now().toString(36) + Math.random().toString(36).slice(2) };
     try { localStorage.setItem('quizSemio_id', JSON.stringify({nome:nome})); } catch(e){}
     $('q-nome').textContent = nome; $('q-turma').textContent = t.value;
     iniciar();
   };
 
   // ---------- Fluxo com tempo por questão ----------
+  // ---------- 1 envio por aparelho; 2ª tentativa só com o código do professor ----------
+  var DONE = 'quizSemio_feito', MAX_TENT = 2, codigoLib = '';
+  function lerFeito(){ try { return JSON.parse(localStorage.getItem(DONE)||'null'); } catch(e){ return null; } }
+  function tentativaAtual(){ var f = lerFeito(); return f ? (f.tentativas || 1) + 1 : 1; }
+  function montarLiberacao(alvo, usadas){
+    var el = $(alvo);
+    if (usadas >= MAX_TENT){ el.classList.add('hidden'); el.innerHTML = ''; return; }
+    el.innerHTML = '<a data-x="abrir">Teve algum problema técnico?</a>'+
+      '<div class="hidden" data-x="caixa"><div style="margin-top:8px">Informe o código fornecido pelo professor.</div>'+
+      '<div class="row"><input type="text" maxlength="20" autocomplete="off" placeholder="Código"><button type="button">Confirmar</button></div>'+
+      '<div class="err"></div></div>';
+    el.classList.remove('hidden');
+    var caixa = el.querySelector('[data-x=caixa]'), inp = el.querySelector('input'), btn = el.querySelector('button'), err = el.querySelector('.err');
+    el.querySelector('[data-x=abrir]').onclick = function(){ caixa.classList.toggle('hidden'); inp.focus(); };
+    btn.onclick = function(){
+      var c = inp.value.replace(/\s+/g,'').toUpperCase();
+      if (!c) return err.textContent = 'Digite o código.';
+      btn.disabled = true; err.textContent = '';
+      fetch(API_URL + '?acao=codigo&cod=' + encodeURIComponent(c)).then(function(r){ return r.json(); }).then(function(d){
+        btn.disabled = false;
+        if (!d.ok) return err.textContent = 'Código inválido. Procure o professor.';
+        codigoLib = c;
+        $('regras').insertAdjacentHTML('beforeend', '<li><b>Tentativa liberada pelo professor.</b></li>');
+        $('btn-iniciar').textContent = 'Iniciar 2ª tentativa';
+        show('tela-id');
+      }).catch(function(e){ btn.disabled = false; err.textContent = 'Não foi possível verificar: ' + e; });
+    };
+  }
+
   var KEY = 'quizSemio_prog', idx = 0, deadline = 0, tick = null, enviando = false;
   function salvarProg(){ try { localStorage.setItem(KEY, JSON.stringify({aluno:aluno, respostas:respostas, idx:idx, deadline:deadline, motivo:motivoSaida})); } catch(e){} }
   var motivoSaida = '';
@@ -274,8 +323,8 @@
     $('timer').classList.add('hidden');
     $('questao').innerHTML = '<p class="center" style="margin:8px 0">Enviando suas respostas…</p>';
     $('btn-prox').disabled = true; $('btn-prox').textContent = 'Enviando…'; $('err-quiz').textContent = '';
-    server('enviarRespostas', { nome: aluno.nome, turma: aluno.turma, respostas: respostas, motivo: motivoSaida, envioId: aluno.envioId })
-      .then(function(r){ limparProg(); mostrarResultado(r); })
+    server('enviarRespostas', { nome: aluno.nome, turma: aluno.turma, respostas: respostas, motivo: motivoSaida, envioId: aluno.envioId, tentativa: aluno.tentativa || 1, codigo: aluno.codigo || '' })
+      .then(function(r){ limparProg(); try { localStorage.setItem(DONE, JSON.stringify({nota:r.nota, max:r.notaMaxima, saiu:!!r.motivo, tentativas: aluno.tentativa || 1})); } catch(e){} mostrarResultado(r); })
       .catch(function(e){
         enviando = false;
         $('questao').innerHTML = '<p class="center" style="margin:8px 0">Suas respostas estão guardadas neste aparelho.</p>';
@@ -300,6 +349,7 @@
              '<span><b>Q'+(i+1)+'.</b> '+esc(q.enunciado)+
              (d.gabarito && !d.certo ? '<span class="g">Resposta correta: '+esc(d.gabarito)+'</span>' : '')+'</span></div>';
     }).join('');
+    montarLiberacao('r-lib', aluno.tentativa || 1);
     show('tela-res');
   }
 })();
